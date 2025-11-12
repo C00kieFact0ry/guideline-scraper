@@ -1,8 +1,12 @@
 from playwright.sync_api import sync_playwright
-from scrapers import RichtlijnenDatabaseScraper
+from scrapers import RichtlijnenDatabaseScraper, KennisinstituutVVNScraper
+
+
 def main():
 
-    scraper_dicts = [{'class':RichtlijnenDatabaseScraper, 'name':'richtlijnenDatabase', 'download_dir':None}]
+    scraper_dicts = [{'class':RichtlijnenDatabaseScraper, 'name':'richtlijnenDatabase', 'download_dir':None},
+                     {'class':KennisinstituutVVNScraper, 'name':'kennisinstituutvvn', 'download_dir':None},
+                     ]
 
     with sync_playwright() as playwright:
         for scraper in scraper_dicts:

@@ -118,6 +118,12 @@ class RichtlijnenDatabaseScraper(BaseScraper):
         # Find all <a> tags whose href starts with the prefix
         link_locators = self.page.locator(f'a[href^="{self.LINK_PREFIX}"]')
 
+        # It's unclear when this page is ready to be scraped.
+        # We assume it is ready when network is idle.
+        print("Waiting for page network to be idle...")
+        self.page.wait_for_load_state('networkidle', timeout=30000)
+        print("Network is idle. Extracting hrefs...")
+
         # locator gives list of links, get the hrefs from them.
         all_hrefs = link_locators.evaluate_all(
             "list => list.map(element => element.href)"
@@ -128,7 +134,7 @@ class RichtlijnenDatabaseScraper(BaseScraper):
 
         print(f"Found {len(unique_urls)} unique richtlijn URLs.")
 
-        # To run all, change 'unique_urls[:5]' to 'unique_urls'
+        # Retrieve files from URLs
         for i, url in enumerate(unique_urls):
             print(f"\x1b[94m\nProcessing {i + 1}/{len(unique_urls)}: {url}\x1b[0m")
             name = url.split("/")[-1]
@@ -139,10 +145,10 @@ class RichtlijnenDatabaseScraper(BaseScraper):
                 print(f"  File already exists. Skipping.")
                 continue
 
-            # Step 3: Go to the link
+            # Go to the link
             self.page.goto(url, timeout=10000)
 
-            # Step 4: Click "Download richtlijn" button
+            # Click "Download richtlijn" button
             download_locator = self.page.get_by_role(
                 "link", name=" Download richtlijn"
             )
@@ -161,17 +167,16 @@ class RichtlijnenDatabaseScraper(BaseScraper):
                 exact=True
             )
 
-            # Wait for this text to become visible (e.g., 10-second timeout)
+            # Wait for this text to become visible
             popup_text.wait_for(state="visible", timeout=10000)
             print("  Popup confirmed: Text 'Selecteer een...' is visible.")
-            # Step 5: Click "genereer" in the popup
+            # Click "genereer" in the popup
             generate_button = self.page.get_by_role("button", name="GENEREER", exact=False)
 
             # Wait for the button to be visible
             generate_button.wait_for(state="visible", timeout=10000)
             print("  Found 'genereer' button.")
 
-            # Step 6: Handle the download
             # We must start 'expect_download' *before* the click
             with self.page.expect_download(timeout=5*60*1000) as download_info:
                 generate_button.click()
@@ -182,6 +187,95 @@ class RichtlijnenDatabaseScraper(BaseScraper):
             # Save the file
             download.save_as(save_path)
             print(f"Successfully saved: {save_path.name}")
+
+            # Add a small delay to be polite to the server
+            time.sleep(random.randint(25, 50) / 100)
+
+        # Note: No cleanup (browser.close) is needed here.
+        # The BaseScraper's .run() method handles that in its 'finally' block.
+
+
+class KennisinstituutVVNScraper(BaseScraper):
+    """
+    Scrapes PDF guidelines from richtlijnendatabase.nl.
+    """
+
+    # Class constant for the relative link prefix
+    LINK_PREFIX = "https://kennisplatform.venvn.nl/onderwerp/"
+
+    def __init__(self, playwright: Playwright, name:str, download_dir: Path | None = None):
+        # Pass the required info to the BaseScraper's init
+        super().__init__(playwright, name=name, download_dir=download_dir)
+
+    @property
+    def base_URL(self) -> Path:
+        return Path("https://kennisplatform.venvn.nl/alle-onderwerpen/")
+
+    def scrape(self):
+        """
+        Implement the site-specific scraping logic.
+        The BaseScraper's .run() method will call this.
+        """
+
+        # Find all <a> tags whose href starts with the prefix
+        link_locators = self.page.locator(f'a[href^="{self.LINK_PREFIX}"]')
+
+        # Wait for the last link to appear before attempting to evaluate all links
+        link_locators.last.wait_for(timeout=10000)
+
+        # locator gives list of links, get the hrefs from them.
+        all_hrefs = link_locators.evaluate_all(
+            "list => list.map(element => element.href)"
+        )
+
+        # Filter for unique URLs
+        unique_urls = sorted(list(set(all_hrefs)))
+
+        print(f"Found {len(unique_urls)} unique richtlijn URLs.")
+
+        # Retrieve files from URLs
+        for i, url in enumerate(unique_urls):
+            print(f"\x1b[94m\nProcessing {i + 1}/{len(unique_urls)}: {url}\x1b[0m")
+            name = url.split("/")[-2]
+            save_path = self.download_dir / f"{name}.pdf"
+
+            # Don't re-download if file already exists
+            if save_path.exists():
+                print(f"  File already exists. Skipping.")
+                continue
+
+            self.page.goto(url, timeout=10000)
+
+            # Click button that redirects to the PDF. Sometimes the text contains handreiking instead of richtlijn.
+            download_locator = self.page.get_by_role(
+                "link", name="Naar de richtlijn"
+            ).or_(self.page.get_by_role(
+                "link", name="Naar de handreiking"))
+
+            if download_locator.count() == 0:
+                print(f"No button found. Skipping.")
+                continue
+            if download_locator.count() > 1:
+                raise Exception(f"Unexpected case: Multiple buttons found.")
+
+            # We need to dip our toe in the water to check whether the button leads to a pdf
+            href = download_locator.get_attribute("href")
+            if href and href.endswith(".pdf"):
+                print(f"Found direct PDF link: {href}. Attempting download...")
+                # We must start 'expect_download' *before* the click
+                with self.page.expect_download(timeout=5*60*1000) as download_info:
+                    download_locator.click()
+                    print("  Clicked button, waiting for download...")
+
+                download = download_info.value
+
+                # Save the file
+                download.save_as(save_path)
+                print(f"Successfully saved: {save_path.name}")
+            else:
+                print(f"Button is not a link or does not lead to PDF:{href}. Skipping.")
+
+
 
             # Add a small delay to be polite to the server
             time.sleep(random.randint(25, 50) / 100)
