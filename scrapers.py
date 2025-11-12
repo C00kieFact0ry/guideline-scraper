@@ -5,12 +5,15 @@ from pathlib import Path
 
 from playwright.sync_api import Playwright
 
+from definitions import ROOT_DIR
+
+
 class BaseScraper(ABC):
     """
     An abstract base class for a scraper.
     It handles the boilerplate setup and cleanup.
     """
-    def __init__(self, playwright: Playwright, name: str):
+    def __init__(self, playwright: Playwright, name: str, download_dir: Path | None = None):
         self.playwright = playwright
         self.name = name
 
@@ -18,6 +21,8 @@ class BaseScraper(ABC):
         self.browser = None
         self.context = None
         self.page = None
+
+        self._download_dir = download_dir
 
     def run(self):
         """
@@ -34,11 +39,15 @@ class BaseScraper(ABC):
             # Create the download directory
             self.download_dir.mkdir(exist_ok=True)
 
+            #Go to the base URL
+            self.page.goto(str(self.base_URL))
+
             # Call the site-specific scraping logic
             self.scrape()
 
         except Exception as e:
-            print(f"Failed to run {self.name}. Error: {e}")
+            print(f"Failed to run {self.name}.")
+            raise Exception(e)
         finally:
             # Ensure we always clean up
             if self.browser:
@@ -65,7 +74,10 @@ class BaseScraper(ABC):
         The default download directory.
         Child classes can override this property for custom paths.
         """
-        return self.download_dir / self.name
+        if self._download_dir is None:
+            return Path(ROOT_DIR) / 'downloads' / self.name
+        else:
+            return self._download_dir
 
 class RichtlijnenDatabaseScraper(BaseScraper):
     """
@@ -75,18 +87,12 @@ class RichtlijnenDatabaseScraper(BaseScraper):
     # Class constant for the relative link prefix
     LINK_PREFIX = "/richtlijn/"
 
-    def __init__(self, playwright: Playwright, download_dir: Path):
+    def __init__(self, playwright: Playwright, name:str, download_dir: Path | None = None):
         # Pass the required info to the BaseScraper's init
-        super().__init__(playwright, name="Richtlijnendatabase")
-
-        # optionally choose a different download directory than the default
-        # self.download_dir = download_dir / "some_other_dir"
+        super().__init__(playwright, name=name, download_dir=download_dir)
 
     @property
     def base_URL(self) -> Path:
-        """Implements the abstract property.
-        The ABC expects a list, so we return a list.
-        """
         return Path("https://richtlijnendatabase.nl")
 
     def scrape(self):
@@ -94,8 +100,6 @@ class RichtlijnenDatabaseScraper(BaseScraper):
         Implement the site-specific scraping logic.
         The BaseScraper's .run() method will call this.
         """
-
-        # self.page, self.context, etc. are already set by the BaseScraper
 
         # Get rid of the cookie banner
         try:
@@ -123,8 +127,6 @@ class RichtlijnenDatabaseScraper(BaseScraper):
         unique_urls = sorted(list(set(all_hrefs)))
 
         print(f"Found {len(unique_urls)} unique richtlijn URLs.")
-
-        # --- Step 3: Loop through each link ---
 
         # To run all, change 'unique_urls[:5]' to 'unique_urls'
         for i, url in enumerate(unique_urls):
@@ -171,7 +173,7 @@ class RichtlijnenDatabaseScraper(BaseScraper):
 
             # Step 6: Handle the download
             # We must start 'expect_download' *before* the click
-            with self.page.expect_download() as download_info:
+            with self.page.expect_download(timeout=5*60*1000) as download_info:
                 generate_button.click()
                 print("  Clicked 'genereer', waiting for download...")
 
@@ -179,7 +181,7 @@ class RichtlijnenDatabaseScraper(BaseScraper):
 
             # Save the file
             download.save_as(save_path)
-            print(f"  ✅ Successfully saved: {save_path.name}")
+            print(f"Successfully saved: {save_path.name}")
 
             # Add a small delay to be polite to the server
             time.sleep(random.randint(25, 50) / 100)
